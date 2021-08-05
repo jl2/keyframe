@@ -71,16 +71,6 @@
 
 
 
-;; Non-keyframed objects return their own value.
-(defmethod value-at ((obj t) time)
-  (declare (ignorable time))
-  obj)
-
-;; keyframe objects return their value
-(defmethod value-at ((obj keyframe) time)
-  (slot-value obj 'value))
-
-
 (defun compute-canonical-time (sequence real-time)
   "Compute the 'canonical' time of real-time for sequence.  The canonical time is the time taking~
    into account start and end behavior (clamping, repeating, etc.)."
@@ -90,18 +80,18 @@
 
       (cond
         ((= start-time end-time)
-         start-time)
+         (values start-time 0))
         ;; In range
         ((and (>= real-time start-time) (<= real-time end-time))
-         real-time)
+         (values real-time 1))
 
         ;; Before and clamping
         ((and (<= real-time start-time) (eq before-behavior :clamp))
-         start-time)
+         (values start-time 0))
 
         ;; After and clamping
         ((and (>= real-time end-time) (eq after-behavior :clamp))
-         end-time)
+         (values end-time 0))
 
         ;; Repeating on the end
         ((and (> real-time end-time) (eq after-behavior :repeat))
@@ -116,6 +106,15 @@
                  ~a end-time ~a before-behavior ~a after-behavior ~a"
                 real-time start-time end-time before-behavior after-behavior))))))
 
+;; Non-keyframed objects return their own value.
+(defmethod value-at ((obj t) time)
+  (declare (ignorable time))
+  obj)
+
+;; keyframe objects return their value
+(defmethod value-at ((obj keyframe) time)
+  (slot-value obj 'value))
+
 (defmethod value-at ((sequence keyframe-sequence) time)
   (with-slots (frames before-behavior after-behavior) sequence
     (let ((last-idx (- (length frames) 1)))
@@ -125,37 +124,38 @@
          (error "Trying to get value-at of empty sequence.")
          nil)
 
-        ;; Single value sequence is always that value
+        ;; Single value sequences are always the value of the first (and only) frame.
         ((= 0 last-idx)
          ;; (format t "Single value sequence.~%")
          (keyframe-value (aref frames 0)))
 
+        ;; With clamping, all values before start time are the
+        ;; value of the first keyframe
         ((and (<= time (start-time sequence))
               (eq before-behavior :clamp) )
          ;; (format t "Before beginning of sequence.~%")
          (keyframe-value (aref frames 0)))
 
+        ;; With clamping, all values after end time are the
+        ;; value of the last keyframe
         ((and (>= time (end-time sequence))
               (eq before-behavior :clamp))
          ;; (format t "After end of sequence.~%")
          (keyframe-value (aref frames last-idx)))
 
+        ;; 
         (t
          ;; (format t "Computing using compute-canonical-time~%")
-         (let* ((canonical-time (compute-canonical-time sequence time))
-                (first-frame-idx (position canonical-time
-                                           frames :test #'>=
-                                                  :key #'start-time
-                                                  :from-end t
-                                                  ))
-                (second-frame-idx (position canonical-time
-                                           frames :test #'<=
-                                                  :key #'start-time
-                                                  :start first-frame-idx
-                                                  ))
-;;                (second-frame-idx (1+ first-frame-idx))
-                (first-frame (aref frames first-frame-idx))
-                (second-frame (aref frames second-frame-idx)))
+         (multiple-value-bind (canonical-time direction) (compute-canonical-time sequence time)
+           (let* (
+                  (first-frame-idx (position canonical-time
+                                             frames :test #'>=
+                                                    :key #'start-time
+                                                    :from-end t
+                                                    ))
+                  (second-frame-idx (+ first-frame-idx direction))
+                  (first-frame (aref frames first-frame-idx))
+                  (second-frame (aref frames second-frame-idx)))
            (with-slots (interpolator) second-frame
              (funcall interpolator
                       (keyframe-value first-frame)
