@@ -95,11 +95,11 @@
 
         ;; Repeating on the end
         ((and (> real-time end-time) (eq after-behavior :repeat))
-         (+ (mod (- real-time start-time) (- end-time start-time)) start-time))
+         (values (+ (mod (- real-time start-time) (- end-time start-time)) start-time) 1))
 
         ;; Repeating on the beginning
         ((and (< real-time start-time) (eq before-behavior :repeat))
-         (+ (mod (- real-time start-time) (- end-time start-time)) start-time))
+         (values (+ (mod (- real-time start-time) (- end-time start-time)) start-time) -1))
 
         (t ;; "This shouldn't happen"
          (error "Unhandled case in compute-canonical-time real-time ~a start-time ~
@@ -161,7 +161,7 @@
                       (keyframe-value first-frame)
                       (keyframe-value second-frame)
                       (/ (- canonical-time (start-time first-frame))
-                         (- (start-time second-frame) (start-time first-frame)))))))))))
+                         (- (start-time second-frame) (start-time first-frame))))))))))))
 
 (defun create-keyframe (value time &key (interpolator #'lerp))
   (make-instance 'keyframe :value value :start-time time :interpolator interpolator))
@@ -176,7 +176,7 @@
                  :before before
                  :after after))
 
-(defun create-simple-keyframe-sequence (points &key (interpolator #'lerp) (time-scale 1.0))
+(defun create-simple-keyframe-sequence (points &key (interpolator #'lerp) (time-scale 1.0) (before :clamp) (after :clamp))
   (make-instance 'keyframe-sequence
                  :frames (make-array (length points)
                                      :element-type 'keyframe
@@ -188,5 +188,5 @@
                                                                             :interpolator interpolator
                                                                             :start-time (* time-scale time)))
                                      :adjustable t)
-                 :before :clamp
-                 :after :clamp))
+                 :before before
+                 :after after))
