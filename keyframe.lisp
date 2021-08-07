@@ -20,7 +20,8 @@
   ((frames :initarg :frames)
    (before-behavior :initarg :before :initform :clamp)
    (after-behavior :initarg :after :initform :clamp))
-  (:documentation "A sequence of keyframes where values in between frames are calculated using interpolation."))
+  (:documentation "A sequence of keyframes where values in between frames are calculated using interpolation.~
+                   :before and :after can be :clamp or :repeat"))
 
 (defclass keyframe ()
   ((value :initarg :value :accessor keyframe-value)
@@ -63,7 +64,6 @@
 
 
 
-
 (defmethod keyframe-count ((sequence keyframe-sequence))
   (with-slots (frames) sequence
     (length frames)))
@@ -71,38 +71,45 @@
 
 
 
-(defun compute-canonical-time (sequence real-time)
+(defun compute-repeating-time (sequence real-time)
   "Compute the 'canonical' time of real-time for sequence.  The canonical time is the time taking~
    into account start and end behavior (clamping, repeating, etc.)."
   (with-slots (before-behavior after-behavior) sequence
-    (let ((start-time (start-time sequence))
-          (end-time (end-time sequence)))
+    (let* ((start-time (start-time sequence))
+           (end-time (end-time sequence))
+           (remainder (mod (- real-time start-time) (- end-time start-time))))
 
       (cond
         ((= start-time end-time)
-         (values start-time 0))
+         start-time)
         ;; In range
         ((and (>= real-time start-time) (<= real-time end-time))
-         (values real-time 1))
+         real-time)
 
         ;; Before and clamping
         ((and (<= real-time start-time) (eq before-behavior :clamp))
-         (values start-time 0))
+         start-time)
 
         ;; After and clamping
         ((and (>= real-time end-time) (eq after-behavior :clamp))
-         (values end-time 0))
+         end-time)
 
         ;; Repeating on the end
+        ((and (= 0.0 remainder) (> real-time end-time) (eq after-behavior :repeat))
+         end-time)
+
         ((and (> real-time end-time) (eq after-behavior :repeat))
-         (values (+ (mod (- real-time start-time) (- end-time start-time)) start-time) 1))
+         (+ remainder start-time))
 
         ;; Repeating on the beginning
+        ((and (= 0.0 remainder) (< real-time start-time) (eq before-behavior :repeat))
+         end-time)
+
         ((and (< real-time start-time) (eq before-behavior :repeat))
-         (values (+ (mod (- real-time start-time) (- end-time start-time)) start-time) -1))
+         (+ remainder start-time))
 
         (t ;; "This shouldn't happen"
-         (error "Unhandled case in compute-canonical-time real-time ~a start-time ~
+         (error "Unhandled case in compute-repeating-time real-time ~a start-time ~
                  ~a end-time ~a before-behavior ~a after-behavior ~a"
                 real-time start-time end-time before-behavior after-behavior))))))
 
@@ -126,48 +133,46 @@
 
         ;; Single value sequences are always the value of the first (and only) frame.
         ((= 0 last-idx)
-         ;; (format t "Single value sequence.~%")
          (keyframe-value (aref frames 0)))
 
         ;; With clamping, all values before start time are the
         ;; value of the first keyframe
         ((and (<= time (start-time sequence))
               (eq before-behavior :clamp) )
-         ;; (format t "Before beginning of sequence.~%")
          (keyframe-value (aref frames 0)))
 
         ;; With clamping, all values after end time are the
         ;; value of the last keyframe
         ((and (>= time (end-time sequence))
               (eq before-behavior :clamp))
-         ;; (format t "After end of sequence.~%")
          (keyframe-value (aref frames last-idx)))
 
-        ;; 
         (t
          ;; (format t "Computing using compute-canonical-time~%")
-         (multiple-value-bind (canonical-time direction) (compute-canonical-time sequence time)
-           (let* (
-                  (first-frame-idx (position canonical-time
+           (let* ((rep-time (compute-repeating-time sequence time))
+                  (first-frame-idx (position rep-time
                                              frames :test #'>=
                                                     :key #'start-time
                                                     :from-end t
                                                     ))
-                  (second-frame-idx (+ first-frame-idx direction))
+                  (second-frame-idx (mod (1+ first-frame-idx) (length frames)))
                   (first-frame (aref frames first-frame-idx))
                   (second-frame (aref frames second-frame-idx)))
-           (with-slots (interpolator) second-frame
-             (funcall interpolator
-                      (keyframe-value first-frame)
-                      (keyframe-value second-frame)
-                      (/ (- canonical-time (start-time first-frame))
-                         (- (start-time second-frame) (start-time first-frame))))))))))))
+             (with-slots (interpolator) second-frame
+               (funcall interpolator
+                        (/ (- rep-time (start-time first-frame))
+                           (- (start-time second-frame) (start-time first-frame)))
+                        (keyframe-value first-frame)
+                        (keyframe-value second-frame)
+                        ))))))))
 
 (defun create-keyframe (value time &key (interpolator #'lerp))
+  "Convenience function for constructing a keyframe."
   (make-instance 'keyframe :value value :start-time time :interpolator interpolator))
 
 (defun create-keyframe-sequence (frames &key (before :clamp) (after :clamp))
-  (declare (type list frames))
+  "Convenience function for constructing a keyframe-sequence from frames."
+  (declare (type sequence frames))
   (make-instance 'keyframe-sequence
                  :frames (make-array (length frames)
                                      :element-type 'keyframe
@@ -177,6 +182,8 @@
                  :after after))
 
 (defun create-simple-keyframe-sequence (points &key (interpolator #'lerp) (time-scale 1.0) (before :clamp) (after :clamp))
+  "Convenience function for constructing a keyframe-sequence from values spaced time-scale time units apart."
+  (declare (type sequence points))
   (make-instance 'keyframe-sequence
                  :frames (make-array (length points)
                                      :element-type 'keyframe
